@@ -1,34 +1,32 @@
--- // Hyper Realistic Ragdoll - Killer v6
+-- // Hyper Realistic Ragdoll - Killer v7
 -- // Language: Luau | Platform: Roblox Executor
--- // Method: Teleport depan → CFrame aim head → simulasi Fire button
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local Camera = workspace.CurrentCamera
 
 local CONFIG = {
+    StandDist  = 4,    -- stud depan bot
+    WaitDeath  = 5,    -- max detik tunggu mati
+    FireRate   = 0.12, -- interval tembak
     AutoKill   = false,
-    StandDist  = 2.5,     -- stud depan bot
-    WaitDeath  = 4,       -- max detik tunggu mati
-    FireRate   = 0.1,     -- interval tembak
     HighlightBots = true,
 }
 
 local killCount = 0
 local highlights = {}
 
--- ===================== UI =====================
+-- ======= UI =======
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "KillerUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
 local MainFrame = Instance.new("Frame", ScreenGui)
-MainFrame.Size = UDim2.new(0, 220, 0, 310)
+MainFrame.Size = UDim2.new(0, 210, 0, 290)
 MainFrame.Position = UDim2.new(0, 20, 0.3, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 0
@@ -36,19 +34,19 @@ MainFrame.Active = true
 MainFrame.Draggable = true
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
 local Stroke = Instance.new("UIStroke", MainFrame)
-Stroke.Color = Color3.fromRGB(255,60,60)
+Stroke.Color = Color3.fromRGB(255, 60, 60)
 Stroke.Thickness = 1.5
 
 local TitleBar = Instance.new("Frame", MainFrame)
-TitleBar.Size = UDim2.new(1,0,0,36)
-TitleBar.BackgroundColor3 = Color3.fromRGB(180,20,20)
+TitleBar.Size = UDim2.new(1, 0, 0, 36)
+TitleBar.BackgroundColor3 = Color3.fromRGB(180, 20, 20)
 TitleBar.BorderSizePixel = 0
-Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0,10)
+Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 10)
 local TitleLbl = Instance.new("TextLabel", TitleBar)
-TitleLbl.Size = UDim2.new(1,0,1,0)
+TitleLbl.Size = UDim2.new(1, 0, 1, 0)
 TitleLbl.BackgroundTransparency = 1
-TitleLbl.Text = "🎯 KILLER v6"
-TitleLbl.TextColor3 = Color3.fromRGB(255,255,255)
+TitleLbl.Text = "🎯 KILLER v7"
+TitleLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
 TitleLbl.TextScaled = true
 TitleLbl.Font = Enum.Font.GothamBold
 
@@ -97,7 +95,7 @@ local BtnOnce = MakeBtn("☠ Kill All (Once)", 130, Color3.fromRGB(180,30,30))
 local BtnAuto = MakeBtn("🔁 Auto Kill: OFF",  178, Color3.fromRGB(40,40,120))
 local BtnHL   = MakeBtn("🔵 Highlight: ON",   226, Color3.fromRGB(0,80,160))
 
--- ===================== DETECT =====================
+-- ======= DETECT =======
 local function isBot(m)
     if not m:IsA("Model") then return false end
     local h = m:FindFirstChildOfClass("Humanoid")
@@ -117,14 +115,14 @@ local function getBots()
     return t
 end
 
--- ===================== HIGHLIGHT =====================
-local function hl(bot)
+-- ======= HIGHLIGHT =======
+local function addHL(bot)
     if not CONFIG.HighlightBots or highlights[bot] then return end
     local s = Instance.new("SelectionBox", ScreenGui)
     s.Adornee = bot
     s.Color3 = Color3.fromRGB(255,50,50)
-    s.LineThickness = 0.08
-    s.SurfaceTransparency = 0.8
+    s.LineThickness = 0.06
+    s.SurfaceTransparency = 0.85
     highlights[bot] = s
 end
 
@@ -132,7 +130,7 @@ local function clearHL()
     for b,s in pairs(highlights) do s:Destroy() highlights[b]=nil end
 end
 
--- ===================== TOOL =====================
+-- ======= TOOL =======
 local function getTool()
     local c = LocalPlayer.Character
     return c and c:FindFirstChildOfClass("Tool")
@@ -146,86 +144,64 @@ local function equipTool()
     if t then t.Parent = c task.wait(0.15) end
 end
 
--- ===================== AIM =====================
--- Paksa kamera dan karakter ngarah TEPAT ke head
-local function aimAtHead(headPos)
+-- ======= CORE: aim + fire =======
+-- Kamera di-set CFrame dari posisi karakter lo ke tepat kepala bot
+-- Ini yang paling akurat — ga ada offset aneh
+local function aimAndFire(headPos)
     local c = LocalPlayer.Character
     if not c then return end
     local root = c:FindFirstChild("HumanoidRootPart")
     if not root then return end
-
-    -- Putar badan karakter ke arah head (flat, ignore Y)
-    local flat = Vector3.new(headPos.X - root.Position.X, 0, headPos.Z - root.Position.Z)
-    if flat.Magnitude > 0 then
-        root.CFrame = CFrame.new(root.Position, root.Position + flat)
-    end
-
-    -- Set kamera CFrame ngarah tepat ke head dari posisi kamera sekarang
-    Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, headPos)
-end
-
--- ===================== FIRE =====================
--- Pakai screen coordinate kepala → VirtualInput tap di titik itu
-local function fireAtHead(headPos)
     local tool = getTool()
     if not tool then return end
 
-    -- Konversi world pos kepala ke screen pos
-    local screenPos, onScreen = Camera:WorldToScreenPoint(headPos)
-    if not onScreen then return end
+    -- Posisi kamera = setinggi kepala lo, dari situ ngarah ke head bot
+    local camPos = root.Position + Vector3.new(0, 1.5, 0)
+    Camera.CFrame = CFrame.lookAt(camPos, headPos)
 
-    local sx = math.floor(screenPos.X)
-    local sy = math.floor(screenPos.Y)
-
-    -- Set mouse hit ke kepala dulu
-    pcall(function() Mouse.Hit = CFrame.new(headPos) end)
-
-    -- Simulasi tap di screen coordinate kepala
+    -- Mouse.Hit = tepat di head
     pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, true, game, 0)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(sx, sy, 0, false, game, 0)
+        Mouse.Hit = CFrame.new(headPos)
     end)
 
-    -- Fire remote di tool dengan head position
+    -- Fire remote di tool — pakai Mouse.Hit (bukan manual position)
     for _, v in ipairs(tool:GetDescendants()) do
         if v:IsA("RemoteEvent") then
             pcall(function() v:FireServer(Mouse.Hit) end)
         end
     end
+
+    -- Activated fallback
+    pcall(function() tool.Activated:Fire() end)
 end
 
--- ===================== KILL =====================
+-- ======= KILL LOOP =======
 local function killBot(bot)
     local c = LocalPlayer.Character
     if not c then return false end
-    local myRoot = c:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return false end
+    local root = c:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
 
     local botRoot = bot:FindFirstChild("HumanoidRootPart") or bot:FindFirstChild("Torso")
     local botHead = bot:FindFirstChild("Head")
     local hum = bot:FindFirstChildOfClass("Humanoid")
     if not botRoot or not botHead or not hum or hum.Health <= 0 then return false end
 
-    -- Teleport tepat depan bot, sama tinggi
-    local botCF = botRoot.CFrame
-    -- Posisi depan = arah -Z dari bot (muka bot)
-    local spawnPos = botCF.Position + botCF.LookVector * CONFIG.StandDist
-    spawnPos = Vector3.new(spawnPos.X, botRoot.Position.Y, spawnPos.Z)
-    myRoot.CFrame = CFrame.new(spawnPos, botRoot.Position)
+    -- Teleport: posisi depan bot, badan lo ngarah ke bot
+    local targetPos = botRoot.Position + botRoot.CFrame.LookVector * CONFIG.StandDist
+    targetPos = Vector3.new(targetPos.X, botRoot.Position.Y, targetPos.Z)
+    root.CFrame = CFrame.new(targetPos, botRoot.Position)
     task.wait(0.1)
 
     -- Equip tool
     if not getTool() then equipTool() end
     if not getTool() then return false end
 
-    -- Fire loop: aim → tembak → cek mati
+    -- Fire loop
     local t0 = tick()
     while hum.Health > 0 and (tick() - t0) < CONFIG.WaitDeath do
-        local headPos = botHead.Position
-        aimAtHead(headPos)
-        task.wait(0.05)
-        fireAtHead(headPos)
+        -- Refresh head position tiap iterasi (bot gerak)
+        aimAndFire(botHead.Position)
         task.wait(CONFIG.FireRate)
     end
 
@@ -237,7 +213,7 @@ local function killBot(bot)
     return false
 end
 
--- ===================== SEQUENCE =====================
+-- ======= SEQUENCE =======
 local function killAll()
     StatusLbl.Text = "Status: Hunting..."
     StatusLbl.TextColor3 = Color3.fromRGB(255,80,80)
@@ -252,14 +228,14 @@ local function killAll()
         TargetLbl.Text = string.format("Target: %d / %d", i, #bots)
         killBot(bot)
         if highlights[bot] then highlights[bot]:Destroy() highlights[bot]=nil end
-        task.wait(CONFIG.KillDelay or 0.1)
+        task.wait(0.05)
     end
     TargetLbl.Text = "Target: -"
     StatusLbl.Text = string.format("Done ✓ — %d killed", killCount)
     StatusLbl.TextColor3 = Color3.fromRGB(80,255,80)
 end
 
--- ===================== BUTTONS =====================
+-- ======= BUTTONS =======
 local autoRunning = false
 
 BtnOnce.MouseButton1Click:Connect(function() task.spawn(killAll) end)
@@ -271,7 +247,7 @@ BtnAuto.MouseButton1Click:Connect(function()
         BtnAuto.BackgroundColor3 = Color3.fromRGB(180,30,30)
         autoRunning = true
         task.spawn(function()
-            while autoRunning do killAll() task.wait(0.3) end
+            while autoRunning do killAll() task.wait(0.2) end
         end)
     else
         autoRunning = false
@@ -287,7 +263,7 @@ BtnHL.MouseButton1Click:Connect(function()
     CONFIG.HighlightBots = not CONFIG.HighlightBots
     if CONFIG.HighlightBots then
         BtnHL.Text = "🔵 Highlight: ON"
-        for _, b in ipairs(getBots()) do hl(b) end
+        for _, b in ipairs(getBots()) do addHL(b) end
     else
         BtnHL.Text = "⚫ Highlight: OFF"
         clearHL()
@@ -296,11 +272,11 @@ end)
 
 RunService.Heartbeat:Connect(function()
     if CONFIG.HighlightBots then
-        for _, b in ipairs(getBots()) do hl(b) end
+        for _, b in ipairs(getBots()) do addHL(b) end
         for b,s in pairs(highlights) do
             if not b.Parent or not isBot(b) then s:Destroy() highlights[b]=nil end
         end
     end
 end)
 
-print("[Killer v6] Loaded")
+print("[Killer v7] Loaded")
