@@ -1,10 +1,10 @@
--- // Hyper Realistic Ragdoll - Headshot Killer v4
+-- // Hyper Realistic Ragdoll - Aimbot Killer v5
 -- // Language: Luau | Platform: Roblox Executor
--- // Method: Remote fire via equipped tool → server-side damage
+-- // Method: CFrame aimlock kepala + simulasi Fire button + tunggu mati
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UIS = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
@@ -12,22 +12,26 @@ local Camera = workspace.CurrentCamera
 
 local CONFIG = {
     AutoKill = false,
-    TeleportOffset = 3,  -- stud depan bot
-    KillDelay = 0.2,
+    TeleportOffset = 3,
+    KillDelay = 0.1,
+    WaitForDeath = 3,    -- max detik tunggu bot mati
+    FireRate = 0.08,     -- interval tembak
     HighlightBots = true,
 }
 
 local killCount = 0
 local highlights = {}
+local aimbotTarget = nil
+local aimbotActive = false
 
 -- // UI
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "HeadshotKillerUI"
+ScreenGui.Name = "AimbotKillerUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game:GetService("CoreGui")
 
 local MainFrame = Instance.new("Frame", ScreenGui)
-MainFrame.Size = UDim2.new(0, 220, 0, 280)
+MainFrame.Size = UDim2.new(0, 220, 0, 310)
 MainFrame.Position = UDim2.new(0, 20, 0.3, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 MainFrame.BorderSizePixel = 0
@@ -46,7 +50,7 @@ Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 10)
 local TitleLabel = Instance.new("TextLabel", TitleBar)
 TitleLabel.Size = UDim2.new(1, 0, 1, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "🎯 HEADSHOT KILLER v4"
+TitleLabel.Text = "🎯 AIMBOT KILLER v5"
 TitleLabel.TextColor3 = Color3.fromRGB(255,255,255)
 TitleLabel.TextScaled = true
 TitleLabel.Font = Enum.Font.GothamBold
@@ -144,33 +148,63 @@ local function equipFirstTool()
     local bp = LocalPlayer:FindFirstChild("Backpack")
     if not char or not bp then return end
     local tool = bp:FindFirstChildOfClass("Tool")
-    if tool then
-        tool.Parent = char
-        task.wait(0.1)
-    end
+    if tool then tool.Parent = char task.wait(0.1) end
 end
 
--- // SCAN REMOTES DI TOOL
-local function getFireRemote(tool)
-    -- Cari semua RemoteEvent di dalam tool
+-- // AIMLOCK: paksa kamera lock ke kepala target
+local function aimLockHead(headPos)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local myRoot = char:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    -- Rotate karakter ke arah target
+    local lookDir = (headPos - myRoot.Position).Unit
+    local flatDir = Vector3.new(lookDir.X, 0, lookDir.Z)
+    myRoot.CFrame = CFrame.new(myRoot.Position, myRoot.Position + flatDir)
+    -- Lock kamera tepat ke kepala
+    Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, headPos)
+end
+
+-- // FIRE: simulasi tap tombol Fire di game
+local function fireWeapon(headPos)
+    local tool = getEquippedTool()
+    if not tool then return end
+
+    -- Method 1: Set mouse hit ke head lalu fire remote
+    pcall(function()
+        Mouse.Hit = CFrame.new(headPos)
+        Mouse.Target = workspace:FindPartOnRay(Ray.new(Camera.CFrame.Position, (headPos - Camera.CFrame.Position).Unit * 1000))
+    end)
+
+    -- Method 2: Scan dan fire semua remote dengan head position
     for _, v in ipairs(tool:GetDescendants()) do
         if v:IsA("RemoteEvent") then
-            -- Prioritas: nama yang mengandung kata fire/shoot/damage/attack
-            local name = v.Name:lower()
-            if name:find("fire") or name:find("shoot") or name:find("damage") 
-               or name:find("attack") or name:find("hit") then
-                return v
-            end
+            pcall(function() v:FireServer(headPos) end)
+            pcall(function() v:FireServer(CFrame.new(headPos)) end)
+            pcall(function() v:FireServer(Mouse.Hit) end)
         end
     end
-    -- Fallback: remote pertama yang ada
-    for _, v in ipairs(tool:GetDescendants()) do
-        if v:IsA("RemoteEvent") then return v end
-    end
-    return nil
+
+    -- Method 3: Fire tool activated dengan mouse pointing ke head
+    pcall(function() tool.Activated:Fire() end)
+
+    -- Method 4: VirtualInputManager simulasi klik
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(
+            Camera:WorldToScreenPoint(headPos).X,
+            Camera:WorldToScreenPoint(headPos).Y,
+            0, true, game, 0
+        )
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(
+            Camera:WorldToScreenPoint(headPos).X,
+            Camera:WorldToScreenPoint(headPos).Y,
+            0, false, game, 0
+        )
+    end)
 end
 
--- // CORE KILL: teleport → aim → fire remote dengan target head
+-- // CORE KILL: teleport → aimlock kepala → tembak → tunggu mati → next
 local function killBot(bot)
     local char = LocalPlayer.Character
     if not char then return false end
@@ -184,53 +218,36 @@ local function killBot(bot)
 
     -- Step 1: Teleport ke depan bot
     local botCF = botRoot.CFrame
-    local spawnCF = botCF * CFrame.new(0, 0, -CONFIG.TeleportOffset)
-    myRoot.CFrame = spawnCF
-    task.wait(0.05)
+    myRoot.CFrame = botCF * CFrame.new(0, 0, -CONFIG.TeleportOffset)
+    task.wait(0.08)
 
-    -- Step 2: Aim kamera ke kepala
-    Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, botHead.Position)
-    task.wait(0.05)
-
-    -- Step 3: Equip tool
+    -- Step 2: Equip tool
     if not getEquippedTool() then
         equipFirstTool()
+        task.wait(0.1)
+    end
+    if not getEquippedTool() then return false end
+
+    -- Step 3: Aimlock + fire loop — tembak terus sampai mati atau timeout
+    local startTime = tick()
+    local fired = false
+
+    while hum.Health > 0 and (tick() - startTime) < CONFIG.WaitForDeath do
+        -- Refresh head position tiap iterasi (bot bisa gerak)
+        local headPos = botHead.Position + Vector3.new(0, 0.1, 0)
+
+        -- Aimlock
+        aimLockHead(headPos)
+        task.wait(0.03)
+
+        -- Fire
+        fireWeapon(headPos)
+        fired = true
+
+        task.wait(CONFIG.FireRate)
     end
 
-    local tool = getEquippedTool()
-    if not tool then return false end
-
-    -- Step 4: Fire remote dengan head position sebagai target
-    local remote = getFireRemote(tool)
-    if remote then
-        -- Coba berbagai signature yang umum di ragdoll games
-        -- Signature 1: FireServer(targetPosition)
-        pcall(function() remote:FireServer(botHead.Position) end)
-        task.wait(0.05)
-        -- Signature 2: FireServer(targetInstance)
-        pcall(function() remote:FireServer(botHead) end)
-        task.wait(0.05)
-        -- Signature 3: FireServer(CFrame)
-        pcall(function() remote:FireServer(CFrame.new(botHead.Position)) end)
-        task.wait(0.05)
-        -- Signature 4: FireServer(target, position)
-        pcall(function() remote:FireServer(bot, botHead.Position) end)
-        task.wait(0.05)
-        -- Signature 5: FireServer(humanoid, position)
-        pcall(function() remote:FireServer(hum, botHead.Position) end)
-    end
-
-    -- Step 5: Simulasi mouse click via tool activated
-    pcall(function()
-        Mouse.Hit = CFrame.new(botHead.Position)
-        Mouse.Target = botHead
-    end)
-
-    -- Step 6: Fire tool.Activated langsung
-    pcall(function() tool.Activated:Fire() end)
-
-    -- Step 7: Cek apakah mati setelah fire
-    task.wait(0.1)
+    -- Cek hasil
     if hum.Health <= 0 then
         killCount += 1
         CounterLabel.Text = string.format("Killed: %d", killCount)
@@ -253,7 +270,7 @@ local function killAllBots()
     end
 
     for i, bot in ipairs(bots) do
-        if not bot.Parent then continue end
+        if not bot.Parent or not isBot(bot) then continue end
         TargetLabel.Text = string.format("Target: %d / %d", i, #bots)
         killBot(bot)
         if highlights[bot] then
@@ -322,4 +339,4 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-print("[HeadshotKiller v4] Loaded — Remote scanner active")
+print("[AimbotKiller v5] Loaded")
